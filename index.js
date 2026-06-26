@@ -88,28 +88,43 @@ async function checkAvailability(dateStr, startTime, endTime) {
 
 // ======= Parse เวลาจากข้อความ =======
 function parseTimeRequest(text) {
-  // รูปแบบ: 12:00-14:00, 12.00-14.00, 12น-14น
-  const timePattern = /(\d{1,2})[:.:]?(\d{0,2})\s*[-–ถึง]\s*(\d{1,2})[:.:]?(\d{0,2})/;
+  const timePattern = /(\d{1,2})[.:]?(\d{0,2})\s*[-–ถึง]\s*(\d{1,2})[.:]?(\d{0,2})/;
   const match = text.match(timePattern);
-  
   if (!match) return null;
-  
+
   const startHour = match[1].padStart(2, "0");
   const startMin = (match[2] || "00").padStart(2, "0");
   const endHour = match[3].padStart(2, "0");
   const endMin = (match[4] || "00").padStart(2, "0");
-  
-  // Parse วันที่
-  let dateStr = "วันนี้";
-  if (text.includes("พรุ่งนี้")) dateStr = "พรุ่งนี้";
-  else if (text.match(/\d{1,2}\/\d{1,2}/)) {
+
+  // แปลงเป็นเวลาไทยปัจจุบัน
+  const bangkokNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+
+  let targetDate = new Date(bangkokNow);
+
+  if (text.includes("พรุ่งนี้") || text.includes("tomorrow")) {
+    targetDate.setDate(targetDate.getDate() + 1);
+  } else if (text.includes("เสาร์") || text.includes("saturday")) {
+    const day = targetDate.getDay();
+    const diff = (6 - day + 7) % 7 || 7;
+    targetDate.setDate(targetDate.getDate() + diff);
+  } else if (text.includes("อาทิตย์") || text.includes("sunday")) {
+    const day = targetDate.getDay();
+    const diff = (0 - day + 7) % 7 || 7;
+    targetDate.setDate(targetDate.getDate() + diff);
+  } else if (text.match(/\d{1,2}\/\d{1,2}/)) {
     const dateMatch = text.match(/(\d{1,2})\/(\d{1,2})/);
-    const year = new Date().getFullYear();
-    dateStr = `${year}-${dateMatch[2].padStart(2,"0")}-${dateMatch[1].padStart(2,"0")}`;
+    const year = bangkokNow.getFullYear();
+    targetDate = new Date(`${year}-${dateMatch[2].padStart(2,"0")}-${dateMatch[1].padStart(2,"0")}`);
   }
-  
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const displayDate = `${pad(targetDate.getDate())}/${pad(targetDate.getMonth() + 1)}`;
+  const isoDate = `${targetDate.getFullYear()}-${pad(targetDate.getMonth() + 1)}-${pad(targetDate.getDate())}`;
+
   return {
-    date: dateStr,
+    date: isoDate,
+    displayDate,
     startTime: `${startHour}:${startMin}`,
     endTime: `${endHour}:${endMin}`,
   };
@@ -140,10 +155,11 @@ async function getReply(text) {
     if (result.error) {
       return "ขออภัยครับ ไม่สามารถเช็คตารางได้ในขณะนี้ กรุณาติดต่อเจ้าหน้าที่โดยตรงนะครับ 🙏";
     }
+    const dateLabel = timeInfo.displayDate;
     if (result.available) {
-      return `ช่วงเวลา ${timeInfo.startTime}–${timeInfo.endTime} น. ว่างอยู่ครับ 🎸\nอยากให้จองเลยไหมครับ? ทางเจ้าหน้าที่จะติดต่อกลับเพื่อยืนยันให้นะครับ 😊`;
+      return `วันที่ ${dateLabel} ช่วงเวลา ${timeInfo.startTime}–${timeInfo.endTime} น. ว่างอยู่ครับ 🎸\nอยากให้จองเลยไหมครับ? ทางเจ้าหน้าที่จะติดต่อกลับเพื่อยืนยันให้นะครับ 😊`;
     } else {
-      return `ขออภัยครับ ช่วงเวลา ${timeInfo.startTime}–${timeInfo.endTime} น. มีการจองแล้ว 🙏\nลองเวลาอื่นได้เลยนะครับ หรือให้เจ้าหน้าที่ช่วยหาเวลาว่างให้ไหมครับ?`;
+      return `ขออภัยครับ วันที่ ${dateLabel} ช่วงเวลา ${timeInfo.startTime}–${timeInfo.endTime} น. มีการจองแล้ว 🙏\nลองเวลาอื่นหรือวันอื่นได้เลยนะครับ`;
     }
   }
   
