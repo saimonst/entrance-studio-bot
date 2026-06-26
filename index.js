@@ -64,10 +64,22 @@ async function checkAvailability(dateStr, startTime, endTime) {
       timeZone: "Asia/Bangkok",
     });
 
-    const events = res.data.items || [];
-    console.log("Events found:", events.length);
-    events.forEach(e => console.log("Event:", e.summary, "|", e.start?.dateTime || e.start?.date, "-", e.end?.dateTime || e.end?.date));
-    return { available: events.length === 0, events };
+    const allEvents = res.data.items || [];
+    // event ที่อยากให้บอทเมินไป (ไม่นับเป็นการจองห้อง)
+    const IGNORE_KEYWORDS = ["เมฆสอน", "ewm", "งานเครื่องเสียง", "จรยไต", "worship event", "family"];
+    const busyEvents = allEvents.filter(e => {
+      const title = (e.summary || "").toLowerCase();
+      // กรอง event ที่เป็น all-day (ทั้งวัน) ออก เช่น งานที่ทอดข้ามหลายวัน
+      const isAllDay = !!e.start?.date && !e.start?.dateTime;
+      if (isAllDay) return false;
+      // กรอง event ที่อยู่ใน blacklist
+      const isIgnored = IGNORE_KEYWORDS.some(k => title.includes(k.toLowerCase()));
+      if (isIgnored) return false;
+      return true;
+    });
+    console.log("All events:", allEvents.length, "Busy events:", busyEvents.length);
+    allEvents.forEach(e => console.log("Event:", e.summary, "| allDay:", !!e.start?.date));
+    return { available: busyEvents.length === 0, events: busyEvents };
   } catch (err) {
     console.error("Calendar error:", err.message);
     return { available: null, error: err.message };
