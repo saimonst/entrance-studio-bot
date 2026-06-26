@@ -66,6 +66,7 @@ async function checkAvailability(dateStr, startTime, endTime) {
 
     const events = res.data.items || [];
     console.log("Events found:", events.length);
+    events.forEach(e => console.log("Event:", e.summary, "|", e.start?.dateTime || e.start?.date, "-", e.end?.dateTime || e.end?.date));
     return { available: events.length === 0, events };
   } catch (err) {
     console.error("Calendar error:", err.message);
