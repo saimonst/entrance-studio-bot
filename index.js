@@ -1,9 +1,90 @@
 const express = require("express");
+const { google } = require("googleapis");
 const app = express();
 app.use(express.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "entrance_studio_bot";
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN || "";
+const CALENDAR_ID = process.env.CALENDAR_ID || "entrancelifeth@gmail.com";
+
+// ======= Google Calendar Auth =======
+function getCalendarClient() {
+  const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || "{}");
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
+  });
+  return google.calendar({ version: "v3", auth });
+}
+
+// ======= เช็คเวลาว่าง =======
+async function checkAvailability(dateStr, startTime, endTime) {
+  try {
+    const calendar = getCalendarClient();
+    const now = new Date();
+    
+    // Parse วันที่และเวลา
+    const [startHour, startMin] = startTime.split(":").map(Number);
+    const [endHour, endMin] = endTime.split(":").map(Number);
+    
+    let targetDate;
+    if (dateStr === "วันนี้" || dateStr === "today") {
+      targetDate = new Date();
+    } else if (dateStr === "พรุ่งนี้" || dateStr === "tomorrow") {
+      targetDate = new Date();
+      targetDate.setDate(targetDate.getDate() + 1);
+    } else {
+      targetDate = new Date(dateStr);
+    }
+    
+    const timeMin = new Date(targetDate);
+    timeMin.setHours(startHour, startMin, 0, 0);
+    const timeMax = new Date(targetDate);
+    timeMax.setHours(endHour, endMin, 0, 0);
+
+    const res = await calendar.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+      singleEvents: true,
+    });
+
+    const events = res.data.items || [];
+    return { available: events.length === 0, events };
+  } catch (err) {
+    console.error("Calendar error:", err.message);
+    return { available: null, error: err.message };
+  }
+}
+
+// ======= Parse เวลาจากข้อความ =======
+function parseTimeRequest(text) {
+  // รูปแบบ: 12:00-14:00, 12.00-14.00, 12น-14น
+  const timePattern = /(\d{1,2})[:.:]?(\d{0,2})\s*[-–ถึง]\s*(\d{1,2})[:.:]?(\d{0,2})/;
+  const match = text.match(timePattern);
+  
+  if (!match) return null;
+  
+  const startHour = match[1].padStart(2, "0");
+  const startMin = (match[2] || "00").padStart(2, "0");
+  const endHour = match[3].padStart(2, "0");
+  const endMin = (match[4] || "00").padStart(2, "0");
+  
+  // Parse วันที่
+  let dateStr = "วันนี้";
+  if (text.includes("พรุ่งนี้")) dateStr = "พรุ่งนี้";
+  else if (text.match(/\d{1,2}\/\d{1,2}/)) {
+    const dateMatch = text.match(/(\d{1,2})\/(\d{1,2})/);
+    const year = new Date().getFullYear();
+    dateStr = `${year}-${dateMatch[2].padStart(2,"0")}-${dateMatch[1].padStart(2,"0")}`;
+  }
+  
+  return {
+    date: dateStr,
+    startTime: `${startHour}:${startMin}`,
+    endTime: `${endHour}:${endMin}`,
+  };
+}
 
 // ======= Logic ตอบคำถาม =======
 const PRICING = [
@@ -16,12 +97,27 @@ const FAQS = [
   { q: ["เปิด", "กี่โมง", "เวลา", "ปิด", "วันไหน", "วันอาทิตย์"], a: "เปิดทุกวัน จันทร์–เสาร์ เวลา 10:00–23:00 น. ครับ 🕙\nปิดวันอาทิตย์นะครับ" },
   { q: ["อุปกรณ์", "มีอะไร", "เครื่องดนตรี", "กลอง", "เบส", "เปียโน", "แอมป์", "ไมค์"], a: "อุปกรณ์ในห้องซ้อมมีครับ 🎵\n• กลอง 1 ชุด\n• เบส 4 สาย 1 ตัว / เบส 5 สาย 1 ตัว\n• เปียโน 2 ตัว\n• แอมป์กีตาร์ Marshall + Fender\n• แอมป์เบส 1 ตัว / แอมป์เปียโน 1 ตัว\n• ไมค์ 3 ตัว" },
   { q: ["ห้อง", "ขนาด", "จุ", "กี่คน"], a: "ห้องซ้อมขนาดกลาง จุได้ประมาณ 8 คนครับ 👥" },
-  { q: ["จอง", "จองยังไง", "book", "อยากจอง", "ขอจอง"], a: "ขอบคุณที่สนใจนะครับ 🙏 กรุณารอสักครู่ ทางเจ้าหน้าที่จะติดต่อกลับเพื่อยืนยันการจองให้ครับ 😊" },
+  { q: ["จอง", "จองยังไง", "จองได้", "book", "อยากจอง", "อยาก จอง", "ขอจอง", "สนใจจอง", "จองห้อง", "จองได้ไหม"], a: "ขอบคุณที่สนใจนะครับ 🙏 กรุณารอสักครู่ ทางเจ้าหน้าที่จะติดต่อกลับเพื่อยืนยันการจองให้ครับ 😊" },
   { q: ["สวัสดี", "หวัดดี", "hello", "hi"], a: "สวัสดีครับ! 😊 ยินดีต้อนรับสู่ Entrance Studio\nมีอะไรให้ช่วยเรื่องห้องซ้อมหรือห้องอัดไหมครับ?" },
 ];
 
-function getReply(text) {
+async function getReply(text) {
   const txt = text.toLowerCase();
+  
+  // เช็คก่อนว่าถามเรื่องเวลาว่างไหม
+  const timeInfo = parseTimeRequest(txt);
+  if (timeInfo) {
+    const result = await checkAvailability(timeInfo.date, timeInfo.startTime, timeInfo.endTime);
+    if (result.error) {
+      return "ขออภัยครับ ไม่สามารถเช็คตารางได้ในขณะนี้ กรุณาติดต่อเจ้าหน้าที่โดยตรงนะครับ 🙏";
+    }
+    if (result.available) {
+      return `ช่วงเวลา ${timeInfo.startTime}–${timeInfo.endTime} น. ว่างอยู่ครับ 🎸\nอยากให้จองเลยไหมครับ? ทางเจ้าหน้าที่จะติดต่อกลับเพื่อยืนยันให้นะครับ 😊`;
+    } else {
+      return `ขออภัยครับ ช่วงเวลา ${timeInfo.startTime}–${timeInfo.endTime} น. มีการจองแล้ว 🙏\nลองเวลาอื่นได้เลยนะครับ หรือให้เจ้าหน้าที่ช่วยหาเวลาว่างให้ไหมครับ?`;
+    }
+  }
+  
   for (const item of [...PRICING, ...FAQS]) {
     if (item.q.some((k) => txt.includes(k.toLowerCase()))) return item.a;
   }
@@ -34,7 +130,6 @@ app.get("/webhook", (req, res) => {
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("Webhook verified!");
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
@@ -42,20 +137,19 @@ app.get("/webhook", (req, res) => {
 });
 
 // ======= Receive Messages =======
-app.post("/webhook", (req, res) => {
+app.post("/webhook", async (req, res) => {
   const body = req.body;
   if (body.object !== "page") return res.sendStatus(404);
 
-  body.entry?.forEach((entry) => {
-    entry.messaging?.forEach((event) => {
-      if (!event.message || event.message.is_echo) return;
+  for (const entry of body.entry || []) {
+    for (const event of entry.messaging || []) {
+      if (!event.message || event.message.is_echo) continue;
       const senderId = event.sender.id;
       const text = event.message.text || "";
-      const reply = getReply(text);
-      sendMessage(senderId, reply);
-    });
-  });
-
+      const reply = await getReply(text);
+      await sendMessage(senderId, reply);
+    }
+  }
   res.status(200).send("EVENT_RECEIVED");
 });
 
