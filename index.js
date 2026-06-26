@@ -21,35 +21,51 @@ function getCalendarClient() {
 async function checkAvailability(dateStr, startTime, endTime) {
   try {
     const calendar = getCalendarClient();
-    const now = new Date();
-    
-    // Parse วันที่และเวลา
+
+    // Parse วันที่และเวลา โดยใช้ timezone Asia/Bangkok (UTC+7)
     const [startHour, startMin] = startTime.split(":").map(Number);
     const [endHour, endMin] = endTime.split(":").map(Number);
-    
-    let targetDate;
+
+    let year, month, day;
+    const now = new Date();
+    // แปลงเป็นเวลาไทยก่อน
+    const bangkokNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+
     if (dateStr === "วันนี้" || dateStr === "today") {
-      targetDate = new Date();
+      year = bangkokNow.getFullYear();
+      month = bangkokNow.getMonth() + 1;
+      day = bangkokNow.getDate();
     } else if (dateStr === "พรุ่งนี้" || dateStr === "tomorrow") {
-      targetDate = new Date();
-      targetDate.setDate(targetDate.getDate() + 1);
+      const tomorrow = new Date(bangkokNow);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      year = tomorrow.getFullYear();
+      month = tomorrow.getMonth() + 1;
+      day = tomorrow.getDate();
     } else {
-      targetDate = new Date(dateStr);
+      // รูปแบบ YYYY-MM-DD
+      const parts = dateStr.split("-");
+      year = parseInt(parts[0]);
+      month = parseInt(parts[1]);
+      day = parseInt(parts[2]);
     }
-    
-    const timeMin = new Date(targetDate);
-    timeMin.setHours(startHour, startMin, 0, 0);
-    const timeMax = new Date(targetDate);
-    timeMax.setHours(endHour, endMin, 0, 0);
+
+    // สร้าง ISO string แบบ Bangkok timezone โดยไม่ใช้ UTC
+    const pad = (n) => String(n).padStart(2, "0");
+    const timeMinStr = `${year}-${pad(month)}-${pad(day)}T${pad(startHour)}:${pad(startMin)}:00+07:00`;
+    const timeMaxStr = `${year}-${pad(month)}-${pad(day)}T${pad(endHour)}:${pad(endMin)}:00+07:00`;
+
+    console.log("Checking availability:", timeMinStr, "to", timeMaxStr);
 
     const res = await calendar.events.list({
       calendarId: CALENDAR_ID,
-      timeMin: timeMin.toISOString(),
-      timeMax: timeMax.toISOString(),
+      timeMin: timeMinStr,
+      timeMax: timeMaxStr,
       singleEvents: true,
+      timeZone: "Asia/Bangkok",
     });
 
     const events = res.data.items || [];
+    console.log("Events found:", events.length);
     return { available: events.length === 0, events };
   } catch (err) {
     console.error("Calendar error:", err.message);
