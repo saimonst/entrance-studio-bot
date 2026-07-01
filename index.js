@@ -112,6 +112,84 @@ async function checkAvailability(dateStr, startTime, endTime) {
   }
 }
 
+// ======= เช็คเวลาว่างทั้งวัน =======
+async function checkDayAvailability(targetDayIndex) {
+  try {
+    const calendar = getCalendarClient();
+    const bangkokNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+
+    // หาวันที่เป้าหมายใน 7 วันข้างหน้า
+    let targetDate = new Date(bangkokNow);
+    const currentDayIndex = targetDate.getDay();
+    let diff = (targetDayIndex - currentDayIndex + 7) % 7;
+    if (diff === 0) diff = 7;
+    targetDate.setDate(targetDate.getDate() + diff);
+
+    const pad = (n) => String(n).padStart(2, "0");
+    const year = targetDate.getFullYear();
+    const month = pad(targetDate.getMonth() + 1);
+    const day = pad(targetDate.getDate());
+    const displayDate = `${targetDate.getDate()}/${targetDate.getMonth() + 1}`;
+
+    // ดึง event ทั้งวัน 10:00-23:00
+    const timeMin = `${year}-${month}-${day}T10:00:00+07:00`;
+    const timeMax = `${year}-${month}-${day}T23:00:00+07:00`;
+
+    const res = await calendar.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: "startTime",
+      timeZone: "Asia/Bangkok",
+    });
+
+    const IGNORE_KEYWORDS = ["เมฆสอน", "ewm", "งานเครื่องเสียง", "จรยไต", "worship event", "family"];
+    const allEvents = res.data.items || [];
+    const busyEvents = allEvents.filter(e => {
+      const title = (e.summary || "").toLowerCase();
+      const isAllDay = !!e.start?.date && !e.start?.dateTime;
+      if (isAllDay) return false;
+      return !IGNORE_KEYWORDS.some(k => title.includes(k));
+    });
+
+    // สร้าง list ช่วงเวลาที่ busy
+    const busySlots = busyEvents.map(e => {
+      const start = new Date(e.start.dateTime);
+      const end = new Date(e.end.dateTime);
+      return {
+        start: start.getHours() * 60 + start.getMinutes(),
+        end: end.getHours() * 60 + end.getMinutes(),
+      };
+    }).sort((a, b) => a.start - b.start);
+
+    // หาช่วงเวลาว่าง (เปิด 10:00-23:00 = 600-1380 นาที)
+    const OPEN = 10 * 60;   // 600
+    const CLOSE = 23 * 60;  // 1380
+    const MIN_SLOT = 30;    // ตัดช่วงที่เหลือ < 30 นาทีออก
+
+    const freeSlots = [];
+    let cursor = OPEN;
+
+    for (const busy of busySlots) {
+      if (busy.start > cursor + MIN_SLOT) {
+        freeSlots.push({ start: cursor, end: busy.start });
+      }
+      cursor = Math.max(cursor, busy.end);
+    }
+    if (CLOSE - cursor >= MIN_SLOT) {
+      freeSlots.push({ start: cursor, end: CLOSE });
+    }
+
+    const toTime = (mins) => `${pad(Math.floor(mins/60))}:${pad(mins%60)}`;
+
+    return { displayDate, freeSlots, toTime };
+  } catch (err) {
+    console.error("Day availability error:", err.message);
+    return null;
+  }
+}
+
 // ======= Parse เวลาจากข้อความ =======
 function parseTimeRequest(text) {
   const timePattern = /(\d{1,2})[.:]?(\d{0,2})\s*[-–ถึง]\s*(\d{1,2})[.:]?(\d{0,2})/;
@@ -186,6 +264,35 @@ const FAQS = [
 async function getReply(text) {
   const txt = text.toLowerCase();
   
+  // เช็คว่าถามว่า "วัน...ว่างตอนไหนบ้าง"
+  const DAY_QUERY_MAP = {
+    "อาทิตย์": 0, "sunday": 0,
+    "จันทร์": 1, "monday": 1,
+    "อังคาร": 2, "tuesday": 2,
+    "พุธ": 3, "wednesday": 3,
+    "พฤหัส": 4, "thursday": 4,
+    "ศุกร์": 5, "friday": 5,
+    "เสาร์": 6, "saturday": 6,
+  };
+  const askingFreeTime = txt.includes("ว่างตอนไหน") || txt.includes("ว่างช่วงไหน") || txt.includes("ว่างกี่โมง") || txt.includes("มีเวลาว่าง") || txt.includes("ว่างบ้างไหม") || txt.includes("ว่างบ้าง");
+  if (askingFreeTime) {
+    const foundDay = Object.entries(DAY_QUERY_MAP).find(([k]) => txt.includes(k));
+    if (foundDay) {
+      const result = await checkDayAvailability(foundDay[1]);
+      if (!result) {
+        await logToSheet(text, "เช็คเวลาว่างทั้งวัน", false);
+        return "ขออภัยครับ ไม่สามารถเช็คตารางได้ในขณะนี้ 🙏";
+      }
+      await logToSheet(text, "เช็คเวลาว่างทั้งวัน", true);
+      if (result.freeSlots.length === 0) {
+        return `วันที่ ${result.displayDate} เต็มทั้งวันเลยครับ 😅
+ลองวันอื่นได้เลยนะครับ หรือติดต่อเจ้าหน้าที่เพื่อเช็คเพิ่มเติมครับ`;
+      }
+      const slotList = result.freeSlots.map(s => `• ${result.toTime(s.start)}–${result.toTime(s.end)} น.`).join("\n");
+      return `วันที่ ${result.displayDate} มีเวลาว่างดังนี้ครับ 🎸\n${slotList}\n\nอยากจองช่วงไหนแจ้งได้เลยนะครับ 😊`;
+    }
+  }
+
   // เช็คก่อนว่าถามเรื่องเวลาว่างไหม
   const timeInfo = parseTimeRequest(txt);
   if (timeInfo) {
