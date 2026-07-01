@@ -6,6 +6,7 @@ app.use(express.json());
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "entrance_studio_bot";
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN || "";
 const CALENDAR_ID = process.env.CALENDAR_ID || "entrancelifeth@gmail.com";
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID || "1hrsVvl0LwhE_YL-ufzFAnQiC5--WuC2YfPB7lUm7bTE";
 
 // ======= Google Calendar Auth =======
 function getCalendarClient() {
@@ -15,6 +16,31 @@ function getCalendarClient() {
     scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
   });
   return google.calendar({ version: "v3", auth });
+}
+
+// ======= บันทึก Log ลง Google Sheets =======
+async function logToSheet(userMessage, category, answered) {
+  try {
+    const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS || "{}");
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+    const sheets = google.sheets({ version: "v4", auth });
+
+    const now = new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" });
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: "Sheet1!A:D",
+      valueInputOption: "USER_ENTERED",
+      resource: {
+        values: [[now, userMessage, category, answered ? "✅" : "❌"]],
+      },
+    });
+  } catch (err) {
+    console.error("Sheets log error:", err.message);
+  }
 }
 
 // ======= เช็คเวลาว่าง =======
@@ -165,19 +191,27 @@ async function getReply(text) {
   if (timeInfo) {
     const result = await checkAvailability(timeInfo.date, timeInfo.startTime, timeInfo.endTime);
     if (result.error) {
+      await logToSheet(text, "เช็คเวลา", false);
       return "ขออภัยครับ ไม่สามารถเช็คตารางได้ในขณะนี้ กรุณาติดต่อเจ้าหน้าที่โดยตรงนะครับ 🙏";
     }
     const dateLabel = timeInfo.displayDate;
+    await logToSheet(text, "เช็คเวลา", true);
     if (result.available) {
       return `วันที่ ${dateLabel} ช่วงเวลา ${timeInfo.startTime}–${timeInfo.endTime} น. ว่างอยู่ครับ 🎸\nอยากให้จองเลยไหมครับ? ทางเจ้าหน้าที่จะติดต่อกลับเพื่อยืนยันให้นะครับ 😊`;
     } else {
       return `ขออภัยครับ วันที่ ${dateLabel} ช่วงเวลา ${timeInfo.startTime}–${timeInfo.endTime} น. มีการจองแล้ว 🙏\nลองเวลาอื่นหรือวันอื่นได้เลยนะครับ`;
     }
   }
-  
+
   for (const item of [...PRICING, ...FAQS]) {
-    if (item.q.some((k) => txt.includes(k.toLowerCase()))) return item.a;
+    if (item.q.some((k) => txt.includes(k.toLowerCase()))) {
+      await logToSheet(text, item.q[0], true);
+      return item.a;
+    }
   }
+
+  // บอทตอบไม่ได้ — บันทึกไว้เพื่อเพิ่มคำตอบภายหลัง
+  await logToSheet(text, "ไม่รู้จัก", false);
   return "ขออภัยครับ ไม่แน่ใจเรื่องนี้ 🙏\nกรุณาติดต่อเจ้าหน้าที่โดยตรงได้เลยนะครับ";
 }
 
